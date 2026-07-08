@@ -46,6 +46,10 @@ inputs:
     description: Only pull the image without starting containers
     required: false
     default: "false"
+  debug:
+    description: Enable verbose deploy diagnostics
+    required: false
+    default: "false"
 
 outputs:
   deployed-image-uri:
@@ -69,24 +73,41 @@ runs:
         REGISTRY_USERNAME: ${{ inputs.registry-username }}
         REGISTRY_PASSWORD: ${{ inputs.registry-password }}
         PULL_ONLY: ${{ inputs.pull-only }}
+        DEBUG: ${{ inputs.debug }}
       with:
         host: ${{ inputs.ssh-host }}
         username: ${{ inputs.ssh-user }}
         key: ${{ inputs.ssh-key }}
         port: ${{ inputs.ssh-port }}
         script_stop: true
-        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY
+        debug: ${{ inputs.debug }}
+        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY,DEBUG
         script: |
           set -euo pipefail
 
           cd "$WORKING_DIRECTORY"
 
+          if [ "$DEBUG" = "true" ]; then
+            echo "[debug] Starting SSH compose deploy"
+            echo "[debug] IMAGE_URI=$IMAGE_URI"
+            echo "[debug] WORKING_DIRECTORY=$WORKING_DIRECTORY"
+            echo "[debug] COMPOSE_PATH=$COMPOSE_PATH"
+            echo "[debug] COMPOSE_PROJECT=$COMPOSE_PROJECT"
+            echo "[debug] REGISTRY_HOST=$REGISTRY_HOST"
+            echo "[debug] PULL_ONLY=$PULL_ONLY"
+            echo "[debug] pwd=$(pwd)"
+            echo "[debug] directory listing:"
+            ls -la
+            docker --version
+            docker compose version
+          fi
+
           if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            echo "🔑 Logging in to $REGISTRY_HOST as $REGISTRY_USERNAME..."
+            echo "Logging in to $REGISTRY_HOST as $REGISTRY_USERNAME..."
             echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
-            echo "✅ Login successful"
+            echo "Login successful"
           else
-            echo "ℹ️ Skipping docker login (credentials not provided)"
+            echo "Skipping docker login (credentials not provided)"
           fi
           echo ""
 
@@ -96,11 +117,27 @@ runs:
           fi
 
           export IMAGE_URI
+          if [ "$DEBUG" = "true" ]; then
+            echo "[debug] docker compose config:"
+            docker compose "${COMPOSE_ARGS[@]}" config
+            echo "[debug] pulling image..."
+          fi
           docker compose "${COMPOSE_ARGS[@]}" pull
 
           if [ "$PULL_ONLY" != "true" ]; then
+            if [ "$DEBUG" = "true" ]; then
+              echo "[debug] starting containers..."
+            fi
             docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans
             docker compose "${COMPOSE_ARGS[@]}" ps
+            if [ "$DEBUG" = "true" ]; then
+              echo "[debug] all containers:"
+              docker ps -a
+              echo "[debug] recent compose logs:"
+              docker compose "${COMPOSE_ARGS[@]}" logs --tail=100
+            fi
+          elif [ "$DEBUG" = "true" ]; then
+            echo "[debug] pull-only=true, skipping compose up"
           fi
 
     - name: Set deploy outputs

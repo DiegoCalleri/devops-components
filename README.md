@@ -275,6 +275,7 @@ Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/depl
 | `working-directory` | | `/opt/app` | Рабочая директория на сервере |
 | `pull-only` | | `false` | Только pull без `up` |
 | `ssh-port` | | `22` | SSH порт |
+| `debug` | | `false` | Подробная диагностика deploy: compose config, ps, последние логи |
 
 ### Secrets
 
@@ -358,6 +359,7 @@ jobs:
       image-uri: ${{ needs.push-image.outputs.image-uri }}
       working-directory: /opt/myapp
       compose-path: /opt/myapp/docker-compose.yml
+      # debug: true # enable temporarily when investigating deploy issues
     secrets:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
@@ -367,6 +369,17 @@ jobs:
 ```
 
 Для production рекомендуется `image-ref-mode: digest` с `image-digest: ${{ needs.push-image.outputs.image-digest }}`.
+
+### Debug deploy
+
+Если deploy job завершился успешно, но контейнер не обновился или не видно вывода `docker compose pull`, включите debug только в прикладном workflow:
+
+```yaml
+with:
+  debug: true
+```
+
+Debug mode включает verbose output `appleboy/ssh-action`, печатает `IMAGE_URI`, `WORKING_DIRECTORY`, `COMPOSE_PATH`, `docker compose config`, `docker ps -a` и последние `docker compose logs --tail=100`. Пароль registry не выводится.
 
 ---
 

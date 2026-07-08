@@ -58,6 +58,11 @@ on:
         required: false
         type: boolean
         default: false
+      debug:
+        description: Enable verbose deploy diagnostics
+        required: false
+        type: boolean
+        default: false
     secrets:
       SSH_HOST:
         required: true
@@ -195,3 +200,4 @@ jobs:
           registry-username: ${{ secrets.REGISTRY_USERNAME }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           pull-only: ${{ inputs.pull-only }}
+          debug: ${{ inputs.debug }}
