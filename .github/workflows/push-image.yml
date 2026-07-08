@@ -69,13 +69,13 @@ on:
     outputs:
       image-uri:
         description: Full image URI with the first tag
-        value: ${{ jobs.push.outputs.image-uri }}
+        value: ${{ jobs.export-uri.outputs.image-uri }}
       image-digest:
         description: Image digest (sha256)
         value: ${{ jobs.push.outputs.image-digest }}
       image-tags:
         description: Comma-separated list of pushed tags
-        value: ${{ jobs.push.outputs.image-tags }}
+        value: ${{ jobs.export-uri.outputs.image-tags }}
 
 jobs:
   push:
@@ -84,9 +84,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-uri: ${{ steps.image-out.outputs.uri }}
       image-digest: ${{ steps.build.outputs.image-digest }}
-      image-tags: ${{ steps.tags.outputs.value }}
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v4
@@ -179,14 +177,34 @@ jobs:
           yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
           yc-registry-id: ${{ secrets.YC_REGISTRY_ID }}
 
-      - name: Export image URI
-        id: image-out
-        if: ${{ !cancelled() }}
+  export-uri:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [push]
+    outputs:
+      image-uri: ${{ steps.export.outputs.image-uri }}
+      image-tags: ${{ steps.export.outputs.image-tags }}
+    steps:
+      - name: Export image URI (no secrets)
+        id: export
         shell: bash
         run: |
+          # Compute tags exactly like in the push job, but without using secrets.
+          if [ -n "${{ inputs.tags }}" ]; then
+            TAGS="${{ inputs.tags }}"
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            TAGS="latest,sha-${SHORT_SHA}"
+          fi
+
+          FIRST_TAG=$(echo "$TAGS" | tr ',' '\n' | head -n1 | xargs)
+
+          IMAGE_URI=""
           case "${{ inputs.registry }}" in
             ghcr)
               REGISTRY_URL="ghcr.io"
+              IMAGE_URI="${REGISTRY_URL}/${{ inputs.image-name }}:${FIRST_TAG}"
               ;;
             custom)
               if [ -z "${{ inputs.registry-url }}" ]; then
@@ -194,22 +212,19 @@ jobs:
                 exit 1
               fi
               REGISTRY_URL="${{ inputs.registry-url }}"
+              REGISTRY_URL="${REGISTRY_URL%/}"
+              IMAGE_URI="${REGISTRY_URL}/${{ inputs.image-name }}:${FIRST_TAG}"
               ;;
-            ycr)
-              if [ -z "${{ secrets.YC_REGISTRY_ID }}" ]; then
-                echo "::error::YC_REGISTRY_ID is required when registry=ycr"
-                exit 1
-              fi
-              REGISTRY_URL="cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
-              ;;
-            ecr)
-              echo "::error::ECR image-uri export is not supported. Use image-ref-mode: digest or tag in deploy."
-              exit 1
+            ecr|ycr)
+              # In this v1 we intentionally don't export image-uri for ECR/YCR
+              # because registry host may require credentials/secret values.
+              IMAGE_URI=""
               ;;
             *)
               echo "::error::Unknown registry: ${{ inputs.registry }}"
               exit 1
               ;;
           esac
-          FIRST_TAG=$(echo "${{ steps.tags.outputs.value }}" | tr ',' '\n' | head -n1 | xargs)
-          echo "uri=${REGISTRY_URL}/${{ inputs.image-name }}:${FIRST_TAG}" >> "$GITHUB_OUTPUT"
+
+          echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "image-tags=${TAGS}" >> "$GITHUB_OUTPUT"
