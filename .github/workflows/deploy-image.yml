@@ -187,7 +187,7 @@ jobs:
           ssh-host: ${{ secrets.SSH_HOST }}
           ssh-user: ${{ secrets.SSH_USER }}
           ssh-key: ${{ secrets.SSH_KEY }}
-          ssh-port: ${{ secrets.SSH_PORT }}
+          ssh-port: ${{ secrets.SSH_PORT || 22 }}
           working-directory: ${{ inputs.working-directory }}
           compose-path: ${{ inputs.compose-path }}
           compose-project: ${{ inputs.compose-project }}

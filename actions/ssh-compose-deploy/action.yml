@@ -73,7 +73,7 @@ runs:
         host: ${{ inputs.ssh-host }}
         username: ${{ inputs.ssh-user }}
         key: ${{ inputs.ssh-key }}
-        port: ${{ secrets.SSH_PORT || 22 }}
+        port: ${{ inputs.ssh-port }}
         script_stop: true
         envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY
         script: |
