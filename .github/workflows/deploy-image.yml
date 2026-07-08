@@ -64,7 +64,7 @@ on:
       SSH_USER:
         required: true
       SSH_PORT:
-        required: true
+        required: false
       SSH_KEY:
         required: true
       REGISTRY_USERNAME:
