@@ -84,9 +84,9 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-uri: ${{ steps.build.outputs.image-uri }}
+      image-uri: ${{ steps.image-out.outputs.uri }}
       image-digest: ${{ steps.build.outputs.image-digest }}
-      image-tags: ${{ steps.build.outputs.image-tags }}
+      image-tags: ${{ steps.tags.outputs.value }}
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v4
@@ -178,3 +178,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
           yc-registry-id: ${{ secrets.YC_REGISTRY_ID }}
+
+      - name: Export image URI
+        id: image-out
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          case "${{ inputs.registry }}" in
+            ghcr)
+              REGISTRY_URL="ghcr.io"
+              ;;
+            custom)
+              if [ -z "${{ inputs.registry-url }}" ]; then
+                echo "::error::registry-url is required when registry=custom"
+                exit 1
+              fi
+              REGISTRY_URL="${{ inputs.registry-url }}"
+              ;;
+            ycr)
+              if [ -z "${{ secrets.YC_REGISTRY_ID }}" ]; then
+                echo "::error::YC_REGISTRY_ID is required when registry=ycr"
+                exit 1
+              fi
+              REGISTRY_URL="cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
+              ;;
+            ecr)
+              echo "::error::ECR image-uri export is not supported. Use image-ref-mode: digest or tag in deploy."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unknown registry: ${{ inputs.registry }}"
+              exit 1
+              ;;
+          esac
+          FIRST_TAG=$(echo "${{ steps.tags.outputs.value }}" | tr ',' '\n' | head -n1 | xargs)
+          echo "uri=${REGISTRY_URL}/${{ inputs.image-name }}:${FIRST_TAG}" >> "$GITHUB_OUTPUT"
