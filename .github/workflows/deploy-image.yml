@@ -224,62 +224,33 @@ jobs:
           echo "dir=${ENV_TARGET_DIR}" >> "$GITHUB_OUTPUT"
           echo "name=${ENV_TARGET_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare env file
+      - name: Write env file over SSH
         if: env.HAS_ENV_CONTENT == 'true'
-        shell: bash
+        uses: appleboy/ssh-action@v1.2.0
         env:
           ENV_CONTENT_INPUT: ${{ inputs.env-content }}
           ENV_CONTENT_SECRET: ${{ secrets.ENV_CONTENT }}
-        run: |
-          mkdir -p .devops-components-deploy/env
-          : > .devops-components-deploy/env/.env
-          if [ -n "$ENV_CONTENT_INPUT" ]; then
-            printf '%s\n' "$ENV_CONTENT_INPUT" >> .devops-components-deploy/env/.env
-          fi
-          if [ -n "$ENV_CONTENT_SECRET" ]; then
-            printf '%s\n' "$ENV_CONTENT_SECRET" >> .devops-components-deploy/env/.env
-          fi
-          chmod 644 .devops-components-deploy/env/.env
-
-      - name: Ensure remote env directory
-        if: env.HAS_ENV_CONTENT == 'true'
-        uses: appleboy/ssh-action@v1.2.0
+          ENV_FILE_PATH: ${{ steps.env-target.outputs.path }}
+          ENV_FILE_DIR: ${{ steps.env-target.outputs.dir }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           script_stop: true
+          envs: ENV_CONTENT_INPUT,ENV_CONTENT_SECRET,ENV_FILE_PATH,ENV_FILE_DIR
           script: |
-            mkdir -p "${{ steps.env-target.outputs.dir }}"
-
-      - name: Upload env file
-        if: env.HAS_ENV_CONTENT == 'true'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: .devops-components-deploy/env/.env
-          target: ${{ steps.env-target.outputs.dir }}/
-          strip_components: 2
-          overwrite: true
-
-      - name: Secure remote env file
-        if: env.HAS_ENV_CONTENT == 'true'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          script_stop: true
-          script: |
-            if [ "${{ steps.env-target.outputs.name }}" != ".env" ]; then
-              mv "${{ steps.env-target.outputs.dir }}/.env" "${{ steps.env-target.outputs.path }}"
+            set -euo pipefail
+            mkdir -p "$ENV_FILE_DIR"
+            umask 077
+            : > "$ENV_FILE_PATH"
+            if [ -n "$ENV_CONTENT_INPUT" ]; then
+              printf '%s\n' "$ENV_CONTENT_INPUT" >> "$ENV_FILE_PATH"
             fi
-            chmod 600 "${{ steps.env-target.outputs.path }}"
+            if [ -n "$ENV_CONTENT_SECRET" ]; then
+              printf '%s\n' "$ENV_CONTENT_SECRET" >> "$ENV_FILE_PATH"
+            fi
+            chmod 600 "$ENV_FILE_PATH"
 
       - name: Deploy via SSH and docker compose
         id: deploy
