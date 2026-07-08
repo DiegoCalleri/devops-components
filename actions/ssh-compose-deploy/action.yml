@@ -82,8 +82,13 @@ runs:
           cd "$WORKING_DIRECTORY"
 
           if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            echo "🔑 Logging in to $REGISTRY_HOST as $REGISTRY_USERNAME..."
             echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+            echo "✅ Login successful"
+          else
+            echo "ℹ️ Skipping docker login (credentials not provided)"
           fi
+          echo ""
 
           COMPOSE_ARGS=(-f "$COMPOSE_PATH")
           if [ -n "$COMPOSE_PROJECT" ]; then
