@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       app-type:
-        description: Application preset — nextjs or nodejs
+        description: Application preset — nextjs, nodejs, or go
         required: true
         type: string
       image-name:
@@ -109,8 +109,14 @@ jobs:
                   echo "::warning::Dockerfile not found in caller repo. Copy docker/nodejs.Dockerfile from devops-components."
                 fi
                 ;;
+              go)
+                DOCKERFILE="Dockerfile"
+                if [ ! -f "$DOCKERFILE" ]; then
+                  echo "::warning::Dockerfile not found in caller repo. Copy docker/go.Dockerfile from devops-components."
+                fi
+                ;;
               *)
-                echo "::error::Unknown app-type: ${{ inputs.app-type }}. Use 'nextjs' or 'nodejs'."
+                echo "::error::Unknown app-type: ${{ inputs.app-type }}. Use 'nextjs', 'nodejs', or 'go'."
                 exit 1
                 ;;
             esac
@@ -139,6 +145,9 @@ jobs:
               ;;
             nodejs)
               ARGS="NODE_ENV=production"
+              ;;
+            go)
+              ARGS="CGO_ENABLED=0"
               ;;
           esac
 

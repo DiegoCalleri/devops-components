@@ -1,0 +1,51 @@
+# Example: full pipeline — build/push Go API to GHCR, deploy to VPS
+#
+# Prerequisites on the VPS:
+#   1. Docker and docker compose installed
+#   2. Copy deploy/docker-compose.yml to /opt/myapp/docker-compose.yml
+#   3. Create /opt/myapp/.env
+
+name: Build and Deploy Go API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: go
+      image-name: ${{ github.repository }}
+      registry: ghcr
+      build-args: |
+        MAIN_PACKAGE=./cmd/server
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: push-image
+    uses: DiegoCalleri/devops-components/.github/workflows/deploy-image.yml@v1
+    with:
+      image-ref-mode: uri
+      image-uri: ${{ needs.push-image.outputs.image-uri }}
+      working-directory: /opt/myapp
+      compose-path: /opt/myapp/docker-compose.yml
+      env-file-path: /opt/myapp/.env
+      env-content: |
+        PORT=8080
+      force-recreate: true
+      # debug: true # enable temporarily when investigating deploy issues
+    secrets:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      # ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

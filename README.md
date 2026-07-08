@@ -1,6 +1,6 @@
 # devops-components
 
-**Reusable CI/CD components for GitHub Actions — build, push, and deploy Docker images for Next.js and Node.js.**
+**Reusable CI/CD components for GitHub Actions — build, push, and deploy Docker images for Next.js, Node.js, and Go.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-ready-2088FF?logo=github-actions&logoColor=white)](.github/workflows/push-image.yml)
@@ -14,7 +14,7 @@
 
 **Два reusable workflow: build/push в registry и deploy на VPS — вместо копипасты CI/CD в каждом репозитории.**
 
-Собирайте, публикуйте и деплойте Docker-образы Next.js и Node.js — через единый вызов `uses:`. Подключите за 2 минуты, переиспользуйте во всех проектах.
+Собирайте, публикуйте и деплойте Docker-образы Next.js, Node.js и Go — через единый вызов `uses:`. Подключите за 2 минуты, переиспользуйте во всех проектах.
 
 ---
 
@@ -46,7 +46,7 @@
 - 80+ строк YAML для `docker build` + `docker push`
 - Разные версии `docker/build-push-action` в разных проектах
 - Расхождение тегов (`latest` vs `sha-abc` vs semver)
-- Отдельные Dockerfile для Next.js и Node.js, скопированные с небольшими отличиями
+- Отдельные Dockerfile для Next.js, Node.js и Go, скопированные с небольшими отличиями
 - Сложно обновить CI/CD сразу во всех репозиториях
 
 ### Решение
@@ -116,6 +116,36 @@ jobs:
       REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Go backend — push образа в GHCR
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy Go API
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: go
+      image-name: ${{ github.repository }}
+      registry: ghcr
+      build-args: |
+        MAIN_PACKAGE=./cmd/server
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+```
+
+> Для `main.go` в корне передайте `MAIN_PACKAGE=.`. Подробнее — в разделе [Push Go image](#3-push-go-image).
+
 > **Важно:** скопируйте reference Dockerfile из [`docker/`](docker/) в корень вашего репозитория. Подробнее — в разделе [Подключение](#подключение-в-своём-репозитории).
 
 ---
@@ -172,7 +202,37 @@ CMD ["node", "dist/main.js"]
 
 ---
 
-### 3. Deploy image на VPS (SSH + docker compose)
+### 3. Push Go image
+
+Сборка минимального production-образа для Go API (Gin, Echo, Fiber, stdlib net/http и др.).
+
+| | |
+|---|---|
+| **Когда использовать** | REST/gRPC API, workers, микросервисы |
+| **Dockerfile** | [`docker/go.Dockerfile`](docker/go.Dockerfile) |
+| **Особенности** | Static binary (`CGO_ENABLED=0`), non-root user, healthcheck на `/health` |
+| **Build-args** | `MAIN_PACKAGE`, `CGO_ENABLED`, `LDFLAGS` |
+
+**Настройте entry point** через `MAIN_PACKAGE` в `build-args`:
+
+```yaml
+build-args: |
+  MAIN_PACKAGE=./cmd/server
+```
+
+```yaml
+# main.go в корне
+build-args: |
+  MAIN_PACKAGE=.
+```
+
+**Добавьте endpoint `/health`** для HEALTHCHECK в Dockerfile.
+
+**Пример:** [`examples/go-api/`](examples/go-api/)
+
+---
+
+### 4. Deploy image на VPS (SSH + docker compose)
 
 Деплой образа из registry на сервер: SSH → `docker login` → `docker compose pull` → `docker compose up`.
 
@@ -187,9 +247,9 @@ CMD ["node", "dist/main.js"]
 
 ---
 
-### 4. Универсальная джоба `push-image`
+### 5. Универсальная джоба `push-image`
 
-Одна reusable workflow для обоих типов приложений. Различия задаются через `app-type` — Dockerfile, build-args и теги подставляются автоматически.
+Одна reusable workflow для всех типов приложений. Различия задаются через `app-type` — Dockerfile, build-args и теги подставляются автоматически.
 
 Файл: [`.github/workflows/push-image.yml`](.github/workflows/push-image.yml)
 
@@ -201,7 +261,7 @@ CMD ["node", "dist/main.js"]
 
 | Input | Обязательный | По умолчанию | Описание |
 |-------|:------------:|--------------|----------|
-| `app-type` | ✅ | — | `nextjs` или `nodejs` |
+| `app-type` | ✅ | — | `nextjs`, `nodejs` или `go` |
 | `image-name` | ✅ | — | Имя образа без registry (например `my-org/my-app`) |
 | `registry` | | `ghcr` | `ghcr`, `ecr`, `ycr`, `custom` |
 | `registry-url` | | `""` | URL registry (обязателен при `registry: custom`) |
@@ -441,6 +501,9 @@ curl -o Dockerfile https://raw.githubusercontent.com/DiegoCalleri/devops-compone
 
 # Для Node.js backend
 curl -o Dockerfile https://raw.githubusercontent.com/DiegoCalleri/devops-components/main/docker/nodejs.Dockerfile
+
+# Для Go backend
+curl -o Dockerfile https://raw.githubusercontent.com/DiegoCalleri/devops-components/main/docker/go.Dockerfile
 ```
 
 ### Шаг 2. Добавьте workflow
@@ -619,7 +682,8 @@ devops-components/
 │       └── action.yml
 ├── docker/
 │   ├── nextjs.Dockerfile
-│   └── nodejs.Dockerfile
+│   ├── nodejs.Dockerfile
+│   └── go.Dockerfile
 ├── deploy/
 │   └── docker-compose.yml        # Reference compose для VPS
 └── examples/
@@ -627,10 +691,14 @@ devops-components/
     │   └── .github/workflows/
     │       ├── deploy.yml
     │       └── full-pipeline.yml
-    └── nodejs-api/
+    ├── nodejs-api/
+    │   └── .github/workflows/
+    │       ├── deploy.yml
+    │       ├── deploy-ecr.yml
+    │       └── full-pipeline.yml
+    └── go-api/
         └── .github/workflows/
             ├── deploy.yml
-            ├── deploy-ecr.yml
             └── full-pipeline.yml
 ```
 
@@ -660,17 +728,17 @@ jobs:
 
 Документация GitHub: [Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
 
-### Чем отличается `app-type: nextjs` от `nodejs`?
+### Чем отличается `app-type: nextjs` от `nodejs` и `go`?
 
-| | `nextjs` | `nodejs` |
-|---|----------|----------|
-| **Назначение** | Frontend (Next.js SSR/ISR) | Backend API |
-| **Dockerfile** | Standalone output, static assets | Prod deps only, dist/ |
-| **Порт** | 3000 (Next.js server) | 3000 (настраивается) |
-| **Healthcheck** | `GET /` | `GET /health` |
-| **Build-args** | `NEXT_PUBLIC_*` | `NODE_ENV` |
+| | `nextjs` | `nodejs` | `go` |
+|---|----------|----------|------|
+| **Назначение** | Frontend (Next.js SSR/ISR) | Backend API | Backend API / workers |
+| **Dockerfile** | Standalone output, static assets | Prod deps only, dist/ | Static binary, alpine runner |
+| **Порт** | 3000 (Next.js server) | 3000 (настраивается) | 8080 |
+| **Healthcheck** | `GET /` | `GET /health` | `GET /health` |
+| **Build-args** | `NEXT_PUBLIC_*` | `NODE_ENV` | `MAIN_PACKAGE`, `CGO_ENABLED`, `LDFLAGS` |
 
-Оба используют один workflow — различие только в пресете Dockerfile и build-args.
+Все используют один workflow — различие только в пресете Dockerfile и build-args.
 
 ### Можно ли использовать свой Dockerfile?
 
