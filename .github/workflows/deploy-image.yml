@@ -232,7 +232,6 @@ jobs:
           ENV_CONTENT_SECRET: ${{ secrets.ENV_CONTENT }}
         run: |
           mkdir -p .devops-components-deploy/env
-          umask 077
           : > .devops-components-deploy/env/.env
           if [ -n "$ENV_CONTENT_INPUT" ]; then
             printf '%s\n' "$ENV_CONTENT_INPUT" >> .devops-components-deploy/env/.env
@@ -240,6 +239,7 @@ jobs:
           if [ -n "$ENV_CONTENT_SECRET" ]; then
             printf '%s\n' "$ENV_CONTENT_SECRET" >> .devops-components-deploy/env/.env
           fi
+          chmod 644 .devops-components-deploy/env/.env
 
       - name: Ensure remote env directory
         if: env.HAS_ENV_CONTENT == 'true'
