@@ -1,0 +1,200 @@
+name: Deploy Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image-ref-mode:
+        description: How to resolve image reference — uri, tag, git-sha, latest, or digest
+        required: false
+        type: string
+        default: uri
+      image-uri:
+        description: Full image URI (required when image-ref-mode=uri)
+        required: false
+        type: string
+        default: ""
+      image-name:
+        description: Image name without registry (required for tag/git-sha/latest/digest modes)
+        required: false
+        type: string
+        default: ""
+      image-tag:
+        description: Explicit tag (required when image-ref-mode=tag)
+        required: false
+        type: string
+        default: ""
+      image-digest:
+        description: Image digest without sha256 prefix (required when image-ref-mode=digest)
+        required: false
+        type: string
+        default: ""
+      registry:
+        description: Registry preset — ghcr, ecr, ycr, or custom
+        required: false
+        type: string
+        default: ghcr
+      registry-url:
+        description: Custom registry URL (required when registry=custom)
+        required: false
+        type: string
+        default: ""
+      compose-path:
+        description: Path to docker-compose.yml on the remote server
+        required: false
+        type: string
+        default: ./docker-compose.yml
+      compose-project:
+        description: Docker compose project name (-p flag)
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        description: Working directory on the remote server
+        required: false
+        type: string
+        default: /opt/app
+      pull-only:
+        description: Only pull the image without starting containers
+        required: false
+        type: boolean
+        default: false
+      ssh-port:
+        description: SSH port
+        required: false
+        type: string
+        default: "22"
+    secrets:
+      SSH_HOST:
+        required: true
+      SSH_USER:
+        required: true
+      SSH_KEY:
+        required: true
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
+    outputs:
+      deployed-image-uri:
+        description: Image URI that was deployed
+        value: ${{ jobs.deploy.outputs.deployed-image-uri }}
+      deploy-status:
+        description: Deployment status
+        value: ${{ jobs.deploy.outputs.deploy-status }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      deployed-image-uri: ${{ steps.deploy.outputs.deployed-image-uri }}
+      deploy-status: ${{ steps.deploy.outputs.deploy-status }}
+    steps:
+      - name: Resolve image reference
+        id: image
+        shell: bash
+        run: |
+          MODE="${{ inputs.image-ref-mode }}"
+          REGISTRY="${{ inputs.registry }}"
+
+          case "$REGISTRY" in
+            ghcr) REGISTRY_URL="ghcr.io" ;;
+            ecr)
+              echo "::error::ECR deploy requires image-ref-mode=uri with a full image-uri from push-image outputs"
+              exit 1
+              ;;
+            ycr)
+              if [ -z "${{ inputs.registry-url }}" ] && [ -z "${{ inputs.image-name }}" ]; then
+                : # ycr url built below if image-name modes used
+              fi
+              if [ -n "${{ inputs.registry-url }}" ]; then
+                REGISTRY_URL="${{ inputs.registry-url }}"
+              elif [ -n "${{ inputs.image-uri }}" ]; then
+                REGISTRY_URL=""
+              else
+                echo "::error::ycr requires registry-url or use image-ref-mode=uri"
+                exit 1
+              fi
+              ;;
+            custom)
+              if [ -z "${{ inputs.registry-url }}" ]; then
+                echo "::error::registry-url is required when registry=custom"
+                exit 1
+              fi
+              REGISTRY_URL="${{ inputs.registry-url }}"
+              ;;
+            *)
+              echo "::error::Unknown registry: $REGISTRY"
+              exit 1
+              ;;
+          esac
+
+          case "$MODE" in
+            uri)
+              if [ -z "${{ inputs.image-uri }}" ]; then
+                echo "::error::image-uri is required when image-ref-mode=uri"
+                exit 1
+              fi
+              RESOLVED="${{ inputs.image-uri }}"
+              REGISTRY_HOST=$(echo "$RESOLVED" | cut -d/ -f1)
+              ;;
+            tag)
+              if [ -z "${{ inputs.image-name }}" ] || [ -z "${{ inputs.image-tag }}" ]; then
+                echo "::error::image-name and image-tag are required when image-ref-mode=tag"
+                exit 1
+              fi
+              RESOLVED="${REGISTRY_URL}/${{ inputs.image-name }}:${{ inputs.image-tag }}"
+              REGISTRY_HOST="$REGISTRY_URL"
+              ;;
+            git-sha)
+              if [ -z "${{ inputs.image-name }}" ]; then
+                echo "::error::image-name is required when image-ref-mode=git-sha"
+                exit 1
+              fi
+              SHORT_SHA="${GITHUB_SHA::7}"
+              RESOLVED="${REGISTRY_URL}/${{ inputs.image-name }}:sha-${SHORT_SHA}"
+              REGISTRY_HOST="$REGISTRY_URL"
+              ;;
+            latest)
+              if [ -z "${{ inputs.image-name }}" ]; then
+                echo "::error::image-name is required when image-ref-mode=latest"
+                exit 1
+              fi
+              RESOLVED="${REGISTRY_URL}/${{ inputs.image-name }}:latest"
+              REGISTRY_HOST="$REGISTRY_URL"
+              ;;
+            digest)
+              if [ -z "${{ inputs.image-name }}" ] || [ -z "${{ inputs.image-digest }}" ]; then
+                echo "::error::image-name and image-digest are required when image-ref-mode=digest"
+                exit 1
+              fi
+              DIGEST="${{ inputs.image-digest }}"
+              DIGEST="${DIGEST#sha256:}"
+              RESOLVED="${REGISTRY_URL}/${{ inputs.image-name }}@sha256:${DIGEST}"
+              REGISTRY_HOST="$REGISTRY_URL"
+              ;;
+            *)
+              echo "::error::Unknown image-ref-mode: $MODE. Use uri, tag, git-sha, latest, or digest."
+              exit 1
+              ;;
+          esac
+
+          echo "uri=${RESOLVED}" >> "$GITHUB_OUTPUT"
+          echo "registry-host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image: ${RESOLVED}"
+
+      - name: Deploy via SSH and docker compose
+        id: deploy
+        uses: DiegoCalleri/devops-components/actions/ssh-compose-deploy@v1
+        with:
+          image-uri: ${{ steps.image.outputs.uri }}
+          ssh-host: ${{ secrets.SSH_HOST }}
+          ssh-user: ${{ secrets.SSH_USER }}
+          ssh-key: ${{ secrets.SSH_KEY }}
+          ssh-port: ${{ inputs.ssh-port }}
+          working-directory: ${{ inputs.working-directory }}
+          compose-path: ${{ inputs.compose-path }}
+          compose-project: ${{ inputs.compose-project }}
+          registry-host: ${{ steps.image.outputs.registry-host }}
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          pull-only: ${{ inputs.pull-only }}

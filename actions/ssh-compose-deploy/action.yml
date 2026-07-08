@@ -1,0 +1,106 @@
+name: SSH Compose Deploy
+description: Deploy a Docker image on a remote server via SSH and docker compose.
+
+inputs:
+  image-uri:
+    description: Full image URI to deploy (tag or digest)
+    required: true
+  ssh-host:
+    description: Remote server host
+    required: true
+  ssh-user:
+    description: SSH username
+    required: true
+  ssh-key:
+    description: SSH private key
+    required: true
+  ssh-port:
+    description: SSH port
+    required: false
+    default: "22"
+  working-directory:
+    description: Working directory on the remote server
+    required: false
+    default: /opt/app
+  compose-path:
+    description: Path to docker-compose.yml on the remote server
+    required: false
+    default: ./docker-compose.yml
+  compose-project:
+    description: Docker compose project name (-p flag)
+    required: false
+    default: ""
+  registry-host:
+    description: Registry host for docker login (e.g. ghcr.io)
+    required: false
+    default: ""
+  registry-username:
+    description: Registry username for docker login on server
+    required: false
+    default: ""
+  registry-password:
+    description: Registry password or token for docker login on server
+    required: false
+    default: ""
+  pull-only:
+    description: Only pull the image without starting containers
+    required: false
+    default: "false"
+
+outputs:
+  deployed-image-uri:
+    description: Image URI that was deployed
+    value: ${{ steps.deploy.outputs.deployed-image-uri }}
+  deploy-status:
+    description: Deployment status
+    value: ${{ steps.deploy.outputs.deploy-status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1.2.0
+      env:
+        IMAGE_URI: ${{ inputs.image-uri }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        COMPOSE_PATH: ${{ inputs.compose-path }}
+        COMPOSE_PROJECT: ${{ inputs.compose-project }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
+        REGISTRY_USERNAME: ${{ inputs.registry-username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+        PULL_ONLY: ${{ inputs.pull-only }}
+      with:
+        host: ${{ inputs.ssh-host }}
+        username: ${{ inputs.ssh-user }}
+        key: ${{ inputs.ssh-key }}
+        port: ${{ inputs.ssh-port }}
+        script_stop: true
+        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY
+        script: |
+          set -euo pipefail
+
+          cd "$WORKING_DIRECTORY"
+
+          if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+          fi
+
+          COMPOSE_ARGS=(-f "$COMPOSE_PATH")
+          if [ -n "$COMPOSE_PROJECT" ]; then
+            COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT")
+          fi
+
+          export IMAGE_URI
+          docker compose "${COMPOSE_ARGS[@]}" pull
+
+          if [ "$PULL_ONLY" != "true" ]; then
+            docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans
+            docker compose "${COMPOSE_ARGS[@]}" ps
+          fi
+
+    - name: Set deploy outputs
+      id: deploy
+      shell: bash
+      run: |
+        echo "deployed-image-uri=${{ inputs.image-uri }}" >> "$GITHUB_OUTPUT"
+        echo "deploy-status=success" >> "$GITHUB_OUTPUT"

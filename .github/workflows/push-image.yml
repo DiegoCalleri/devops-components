@@ -160,7 +160,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: DiegoCalleri/devops-components/actions/build-and-push@main
+        uses: DiegoCalleri/devops-components/actions/build-and-push@v1
         with:
           image-name: ${{ inputs.image-name }}
           registry: ${{ inputs.registry }}

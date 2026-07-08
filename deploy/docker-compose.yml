@@ -1,0 +1,13 @@
+# Reference docker-compose.yml for the deployment server.
+# Copy to your VPS (e.g. /opt/myapp/docker-compose.yml) and adjust ports/env as needed.
+#
+# IMAGE_URI is injected by the deploy workflow via environment variable.
+
+services:
+  app:
+    image: ${IMAGE_URI}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env

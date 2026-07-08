@@ -15,6 +15,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   push-image:
     uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1

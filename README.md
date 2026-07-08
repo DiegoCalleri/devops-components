@@ -1,20 +1,20 @@
 # devops-components
 
-**Reusable CI/CD components for GitHub Actions — build & push Docker images for Next.js and Node.js in one line.**
+**Reusable CI/CD components for GitHub Actions — build, push, and deploy Docker images for Next.js and Node.js.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-ready-2088FF?logo=github-actions&logoColor=white)](.github/workflows/push-image.yml)
 [![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)](docker/)
 
-> **TL;DR (EN):** Stop copy-pasting Docker build/push YAML into every repo. Use one reusable workflow — `push-image.yml` — to build and push Next.js or Node.js images to GHCR, AWS ECR, or Yandex Container Registry.
+> **TL;DR (EN):** Stop copy-pasting Docker CI/CD YAML into every repo. Use reusable workflows — `push-image.yml` to build & push, `deploy-image.yml` to deploy via SSH + docker compose on your VPS.
 
 ---
 
 # devops-components — переиспользуемые CI/CD-компоненты для GitHub Actions
 
-**Один reusable workflow вместо копипасты Docker build/push в каждом репозитории.**
+**Два reusable workflow: build/push в registry и deploy на VPS — вместо копипасты CI/CD в каждом репозитории.**
 
-Собирайте и публикуйте Docker-образы Next.js-приложений и Node.js-бэкендов в container registry — через единый вызов `uses:`. Подключите за 2 минуты, переиспользуйте во всех проектах.
+Собирайте, публикуйте и деплойте Docker-образы Next.js и Node.js — через единый вызов `uses:`. Подключите за 2 минуты, переиспользуйте во всех проектах.
 
 ---
 
@@ -24,6 +24,8 @@
 - [Быстрый старт](#быстрый-старт)
 - [Компоненты](#компоненты)
 - [Универсальная джоба push-image](#универсальная-джоба-push-image)
+- [Deploy image на VPS](#deploy-image-на-vps)
+- [Full pipeline: push + deploy](#full-pipeline-push--deploy)
 - [Подключение в своём репозитории](#подключение-в-своём-репозитории)
 - [Поддерживаемые registry](#поддерживаемые-registry)
 - [Версионирование](#версионирование)
@@ -72,6 +74,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   push-image:
     uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
@@ -93,6 +99,10 @@ name: Deploy Node.js API
 on:
   push:
     branches: [main]
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   push-image:
@@ -162,7 +172,22 @@ CMD ["node", "dist/main.js"]
 
 ---
 
-### 3. Универсальная джоба `push-image`
+### 3. Deploy image на VPS (SSH + docker compose)
+
+Деплой образа из registry на сервер: SSH → `docker login` → `docker compose pull` → `docker compose up`.
+
+| | |
+|---|---|
+| **Когда использовать** | VPS, bare metal, self-hosted сервер с Docker |
+| **Compose template** | [`deploy/docker-compose.yml`](deploy/docker-compose.yml) |
+| **Workflow** | [`.github/workflows/deploy-image.yml`](.github/workflows/deploy-image.yml) |
+| **Особенности** | 5 режимов получения тега (`image-ref-mode`), registry login на сервере |
+
+**Пример:** [`examples/nextjs-app/.github/workflows/full-pipeline.yml`](examples/nextjs-app/.github/workflows/full-pipeline.yml)
+
+---
+
+### 4. Универсальная джоба `push-image`
 
 Одна reusable workflow для обоих типов приложений. Различия задаются через `app-type` — Dockerfile, build-args и теги подставляются автоматически.
 
@@ -207,7 +232,7 @@ CMD ["node", "dist/main.js"]
 | `image-digest` | Digest образа (`sha256:...`) |
 | `image-tags` | Список тегов через запятую |
 
-### Пример с outputs
+### Пример с outputs (ручной deploy)
 
 ```yaml
 jobs:
@@ -223,8 +248,123 @@ jobs:
     needs: push-image
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Deployed ${{ needs.push-image.outputs.image-uri }}"
+      - run: echo "Image ready ${{ needs.push-image.outputs.image-uri }}"
 ```
+
+---
+
+## Deploy image на VPS
+
+Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/deploy-image.yml)
+
+### Inputs
+
+| Input | Обязательный | По умолчанию | Описание |
+|-------|:------------:|--------------|----------|
+| `image-ref-mode` | | `uri` | Режим разрешения образа (см. таблицу ниже) |
+| `image-uri` | | `""` | Полный URI — для mode `uri` |
+| `image-name` | | `""` | Имя без registry — для `tag` / `git-sha` / `latest` / `digest` |
+| `image-tag` | | `""` | Явный тег — для mode `tag` |
+| `image-digest` | | `""` | Digest — для mode `digest` |
+| `registry` | | `ghcr` | `ghcr`, `ycr`, `custom` |
+| `registry-url` | | `""` | URL registry (для `custom` / `ycr`) |
+| `compose-path` | | `./docker-compose.yml` | Путь к compose **на сервере** |
+| `compose-project` | | `""` | Имя проекта docker compose (`-p`) |
+| `working-directory` | | `/opt/app` | Рабочая директория на сервере |
+| `pull-only` | | `false` | Только pull без `up` |
+| `ssh-port` | | `22` | SSH порт |
+
+### Secrets
+
+| Secret | Описание |
+|--------|----------|
+| `SSH_HOST` | IP или домен VPS |
+| `SSH_USER` | SSH username |
+| `SSH_KEY` | SSH private key |
+| `REGISTRY_USERNAME` | Для `docker login` на сервере |
+| `REGISTRY_PASSWORD` | Token / password |
+
+### Outputs
+
+| Output | Описание |
+|--------|----------|
+| `deployed-image-uri` | Задеплоенный URI образа |
+| `deploy-status` | `success` |
+
+### Режимы получения тега (`image-ref-mode`)
+
+| Mode | Когда использовать | Как резолвится |
+|------|-------------------|----------------|
+| **`uri`** (default) | Push и deploy в одном workflow | `image-uri: ${{ needs.push-image.outputs.image-uri }}` |
+| **`tag`** | Ручной деплой конкретной версии | `{registry}/{image-name}:{image-tag}` |
+| **`git-sha`** | Деплой текущего коммита | `{registry}/{image-name}:sha-{GITHUB_SHA[:7]}` |
+| **`latest`** | Деплой последнего образа | `{registry}/{image-name}:latest` |
+| **`digest`** | Immutable deploy (production) | `{registry}/{image-name}@sha256:{digest}` |
+
+### Подготовка сервера
+
+```bash
+# На VPS
+mkdir -p /opt/myapp
+curl -o /opt/myapp/docker-compose.yml \
+  https://raw.githubusercontent.com/DiegoCalleri/devops-components/main/deploy/docker-compose.yml
+touch /opt/myapp/.env   # runtime-переменные
+```
+
+Reference compose использует `${IMAGE_URI}` — тег подставляется автоматически при деплое.
+
+### Безопасность deploy
+
+- SSH key храните только в GitHub Secrets (`SSH_KEY`), не в коде
+- Для production используйте `image-ref-mode: digest` — immutable ссылка на образ
+- Не запускайте deploy workflow на `pull_request` из форков
+- Добавьте `.dockerignore` в прикладной сервис — секреты не должны попадать в образ
+- `REGISTRY_PASSWORD` на сервере передаётся через env и маскируется в логах GitHub
+
+---
+
+## Full pipeline: push + deploy
+
+```yaml
+# .github/workflows/full-pipeline.yml
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: nextjs
+      image-name: ${{ github.repository }}
+      registry: ghcr
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: push-image
+    uses: DiegoCalleri/devops-components/.github/workflows/deploy-image.yml@v1
+    with:
+      image-ref-mode: uri
+      image-uri: ${{ needs.push-image.outputs.image-uri }}
+      working-directory: /opt/myapp
+      compose-path: /opt/myapp/docker-compose.yml
+    secrets:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Для production рекомендуется `image-ref-mode: digest` с `image-digest: ${{ needs.push-image.outputs.image-digest }}`.
 
 ---
 
@@ -358,22 +498,26 @@ secrets:
 ```mermaid
 flowchart LR
   subgraph consumer [Ваш репозиторий]
-    WF[".github/workflows/deploy.yml"]
+    WF["full-pipeline.yml"]
   end
   subgraph devops [devops-components]
-    RW["push-image.yml"]
-    CA["build-and-push action"]
+    Push["push-image.yml"]
+    Deploy["deploy-image.yml"]
+    BuildAction["build-and-push"]
+    DeployAction["ssh-compose-deploy"]
   end
   subgraph targets [Container Registry]
     GHCR[GHCR]
-    ECR[AWS ECR]
-    YCR[Yandex CR]
   end
-  WF -->|"uses: ...@v1"| RW
-  RW --> CA
-  CA --> GHCR
-  CA --> ECR
-  CA --> YCR
+  subgraph server [VPS]
+    Compose["docker-compose.yml"]
+  end
+  WF --> Push
+  WF --> Deploy
+  Push --> BuildAction
+  BuildAction --> GHCR
+  Deploy --> DeployAction
+  DeployAction -->|"SSH"| Compose
 ```
 
 ### Последовательность push
@@ -403,20 +547,28 @@ devops-components/
 ├── LICENSE
 ├── .github/
 │   └── workflows/
-│       └── push-image.yml          # Универсальный reusable workflow
+│       ├── push-image.yml          # Build + push в registry
+│       └── deploy-image.yml        # Deploy на VPS через SSH
 ├── actions/
-│   └── build-and-push/
-│       └── action.yml              # Composite action: login + build + push
+│   ├── build-and-push/
+│   │   └── action.yml
+│   └── ssh-compose-deploy/
+│       └── action.yml
 ├── docker/
-│   ├── nextjs.Dockerfile           # Reference для Next.js
-│   └── nodejs.Dockerfile           # Reference для Node.js backend
+│   ├── nextjs.Dockerfile
+│   └── nodejs.Dockerfile
+├── deploy/
+│   └── docker-compose.yml        # Reference compose для VPS
 └── examples/
     ├── nextjs-app/
-    │   └── .github/workflows/deploy.yml
+    │   └── .github/workflows/
+    │       ├── deploy.yml
+    │       └── full-pipeline.yml
     └── nodejs-api/
         └── .github/workflows/
             ├── deploy.yml
-            └── deploy-ecr.yml
+            ├── deploy-ecr.yml
+            └── full-pipeline.yml
 ```
 
 ---
@@ -482,6 +634,21 @@ with:
   platforms: linux/amd64,linux/arm64
 ```
 
+### Как задеплоить образ на VPS через GitHub Actions?
+
+1. Скопируйте [`deploy/docker-compose.yml`](deploy/docker-compose.yml) на сервер в `/opt/myapp/`
+2. Добавьте secrets: `SSH_HOST`, `SSH_USER`, `SSH_KEY`
+3. Используйте [`full-pipeline.yml`](examples/nextjs-app/.github/workflows/full-pipeline.yml) как шаблон
+4. Образ подтянется из registry и запустится через `docker compose up`
+
+### Какой `image-ref-mode` выбрать?
+
+- **push + deploy в одном workflow** → `uri` (передайте `needs.push-image.outputs.image-uri`)
+- **production, immutable** → `digest` (передайте `needs.push-image.outputs.image-digest`)
+- **ручной деплой версии** → `tag` (укажите `image-tag: v1.2.3`)
+- **деплой текущего коммита** → `git-sha`
+- **последний образ** → `latest`
+
 ### Можно ли пушить в S3 / object storage вместо registry?
 
 Текущий компонент работает с **container registry** (GHCR, ECR, YCR). Загрузка tar-артефактов в S3/GCS — отдельный компонент в roadmap. Если нужен — [создайте issue](https://github.com/DiegoCalleri/devops-components/issues/new).
@@ -490,9 +657,11 @@ with:
 
 ## Roadmap
 
+- [x] Deploy на VPS через SSH + docker compose
 - [ ] Multi-arch builds (`linux/amd64`, `linux/arm64`)
 - [ ] Сканирование образов (Trivy / Grype)
-- [ ] Deploy-хуки (Kubernetes, Coolify, Docker Swarm)
+- [ ] Deploy через webhook (Coolify, Portainer)
+- [ ] Deploy в Kubernetes / Helm
 - [ ] Upload артефактов в S3 / object storage
 - [ ] GitLab CI templates
 - [ ] Composite action для lint + test + push (полный pipeline)
