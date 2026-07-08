@@ -228,9 +228,11 @@ CMD ["node", "dist/main.js"]
 
 | Output | Описание |
 |--------|----------|
-| `image-uri` | Полный URI образа с первым тегом |
+| `image-uri` | Полный URI образа с первым тегом (собирается из inputs, не из docker daemon — чтобы GitHub не блокировал output из-за secrets) |
 | `image-digest` | Digest образа (`sha256:...`) |
 | `image-tags` | Список тегов через запятую |
+
+> **ECR:** output `image-uri` не экспортируется для `registry: ecr`. В deploy используйте `image-ref-mode: digest` с `needs.push-image.outputs.image-digest`.
 
 ### Пример с outputs (ручной deploy)
 
@@ -299,7 +301,7 @@ Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/depl
 | **`tag`** | Ручной деплой конкретной версии | `{registry}/{image-name}:{image-tag}` |
 | **`git-sha`** | Деплой текущего коммита | `{registry}/{image-name}:sha-{GITHUB_SHA[:7]}` |
 | **`latest`** | Деплой последнего образа | `{registry}/{image-name}:latest` |
-| **`digest`** | Immutable deploy (production) | `{registry}/{image-name}@sha256:{digest}` |
+| **`digest`** | Immutable deploy (production) | `{registry}/{image-name}@sha256:{digest}`. **Рекомендуется для ECR** — `image-digest: ${{ needs.push-image.outputs.image-digest }}` |
 
 ### Подготовка сервера
 
@@ -633,6 +635,19 @@ with:
 with:
   platforms: linux/amd64,linux/arm64
 ```
+
+### Почему `image-uri` был пустым в deploy?
+
+GitHub Actions блокирует job outputs, если считает, что значение могло содержать секрет (`Skip output 'image-uri' since it may contain secret`).
+
+**Причина:** раньше `image-uri` брался из composite action, который получал `REGISTRY_PASSWORD` и другие secrets.
+
+**Исправлено:** `image-uri` теперь собирается в отдельном шаге `Export image URI` из публичных inputs (`registry`, `image-name`, `tags`) — без контакта с secrets.
+
+Если всё ещё пусто:
+1. Убедитесь, что используете актуальный `push-image.yml` из devops-components
+2. Re-run **всех** jobs (не только deploy)
+3. Для ECR используйте `image-ref-mode: digest` вместо `uri`
 
 ### Как задеплоить образ на VPS через GitHub Actions?
 
