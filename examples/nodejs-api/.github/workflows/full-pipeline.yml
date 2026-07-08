@@ -35,9 +35,16 @@ jobs:
       image-uri: ${{ needs.push-image.outputs.image-uri }}
       working-directory: /opt/myapp
       compose-path: /opt/myapp/docker-compose.yml
+      env-file-path: /opt/myapp/.env
+      env-content: |
+        NODE_ENV=production
+        PORT=3000
+      force-recreate: true
+      # debug: true # enable temporarily when investigating deploy issues
     secrets:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_KEY: ${{ secrets.SSH_KEY }}
+      # ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
       REGISTRY_USERNAME: ${{ github.actor }}
       REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

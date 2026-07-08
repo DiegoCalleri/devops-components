@@ -46,6 +46,10 @@ inputs:
     description: Only pull the image without starting containers
     required: false
     default: "false"
+  force-recreate:
+    description: Force recreate containers during docker compose up
+    required: false
+    default: "false"
   debug:
     description: Enable verbose deploy diagnostics
     required: false
@@ -73,6 +77,7 @@ runs:
         REGISTRY_USERNAME: ${{ inputs.registry-username }}
         REGISTRY_PASSWORD: ${{ inputs.registry-password }}
         PULL_ONLY: ${{ inputs.pull-only }}
+        FORCE_RECREATE: ${{ inputs.force-recreate }}
         DEBUG: ${{ inputs.debug }}
       with:
         host: ${{ inputs.ssh-host }}
@@ -81,11 +86,16 @@ runs:
         port: ${{ inputs.ssh-port }}
         script_stop: true
         debug: ${{ inputs.debug }}
-        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY,DEBUG
+        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY,FORCE_RECREATE,DEBUG
         script: |
           set -euo pipefail
 
           cd "$WORKING_DIRECTORY"
+
+          if [ ! -f "$COMPOSE_PATH" ]; then
+            echo "::error::Compose file not found: $COMPOSE_PATH"
+            exit 1
+          fi
 
           if [ "$DEBUG" = "true" ]; then
             echo "[debug] Starting SSH compose deploy"
@@ -95,6 +105,7 @@ runs:
             echo "[debug] COMPOSE_PROJECT=$COMPOSE_PROJECT"
             echo "[debug] REGISTRY_HOST=$REGISTRY_HOST"
             echo "[debug] PULL_ONLY=$PULL_ONLY"
+            echo "[debug] FORCE_RECREATE=$FORCE_RECREATE"
             echo "[debug] pwd=$(pwd)"
             echo "[debug] directory listing:"
             ls -la
@@ -128,7 +139,11 @@ runs:
             if [ "$DEBUG" = "true" ]; then
               echo "[debug] starting containers..."
             fi
-            docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans
+            UP_ARGS=(up -d --remove-orphans)
+            if [ "$FORCE_RECREATE" = "true" ]; then
+              UP_ARGS+=(--force-recreate)
+            fi
+            docker compose "${COMPOSE_ARGS[@]}" "${UP_ARGS[@]}"
             docker compose "${COMPOSE_ARGS[@]}" ps
             if [ "$DEBUG" = "true" ]; then
               echo "[debug] all containers:"

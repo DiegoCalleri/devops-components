@@ -274,6 +274,9 @@ Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/depl
 | `compose-project` | | `""` | Имя проекта docker compose (`-p`) |
 | `working-directory` | | `/opt/app` | Рабочая директория на сервере |
 | `pull-only` | | `false` | Только pull без `up` |
+| `env-file-path` | | `""` | Remote `.env` path to create/update before deploy |
+| `env-content` | | `""` | Non-secret `.env` content generated from GitHub Variables |
+| `force-recreate` | | `false` | Добавляет `--force-recreate` к `docker compose up` |
 | `ssh-port` | | `22` | SSH порт |
 | `debug` | | `false` | Подробная диагностика deploy: compose config, ps, последние логи |
 
@@ -284,6 +287,7 @@ Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/depl
 | `SSH_HOST` | IP или домен VPS |
 | `SSH_USER` | SSH username |
 | `SSH_KEY` | SSH private key |
+| `ENV_CONTENT` | Optional secret `.env` content appended after `env-content` |
 | `REGISTRY_USERNAME` | Для `docker login` на сервере |
 | `REGISTRY_PASSWORD` | Token / password |
 
@@ -311,10 +315,49 @@ Reusable workflow: [`.github/workflows/deploy-image.yml`](.github/workflows/depl
 mkdir -p /opt/myapp
 curl -o /opt/myapp/docker-compose.yml \
   https://raw.githubusercontent.com/DiegoCalleri/devops-components/main/deploy/docker-compose.yml
-touch /opt/myapp/.env   # runtime-переменные
 ```
 
 Reference compose использует `${IMAGE_URI}` — тег подставляется автоматически при деплое.
+`.env` можно хранить на сервере вручную или генерировать из GitHub Variables/Secrets через `env-content`.
+
+### Generate `.env` from GitHub Variables and Secrets
+
+Передайте `env-content`, и workflow создаст временный `.env` на GitHub runner, загрузит его на сервер через SCP, выставит `chmod 600`, а затем запустит `docker compose`.
+
+```yaml
+with:
+  env-file-path: /opt/telegram-allegro/.env
+  env-content: |
+    FRONT_PORT=${{ vars.FRONT_PORT }}
+    PRICES_URL=${{ vars.PRICES_URL }}
+    REVALIDATE_SECONDS=${{ vars.REVALIDATE_SECONDS }}
+    NEXT_PUBLIC_SCHOOL_URL=${{ vars.NEXT_PUBLIC_SCHOOL_URL }}
+```
+
+Для чувствительных значений создайте GitHub Secret `ENV_CONTENT` с несколькими строками:
+
+```text
+JWT_SECRET=...
+API_KEY=...
+DATABASE_URL=...
+```
+
+И передайте его в reusable workflow:
+
+```yaml
+secrets:
+  ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+```
+
+Если заданы и `env-content`, и secret `ENV_CONTENT`, файл будет собран из обоих блоков: сначала public vars, затем secret lines.
+
+Если `env-file-path` не указан, но `env-content` задан, файл будет создан как `${working-directory}/.env`.
+
+Security notes:
+
+- Не выводите `env-content` в логах и не включайте команды вроде `cat .env`.
+- Компонент не печатает содержимое `.env` и `REGISTRY_PASSWORD`.
+- Для reusable workflows не смешивайте `${{ secrets.* }}` прямо в `with.env-content`; используйте secret `ENV_CONTENT`.
 
 ### Безопасность deploy
 
@@ -359,6 +402,10 @@ jobs:
       image-uri: ${{ needs.push-image.outputs.image-uri }}
       working-directory: /opt/myapp
       compose-path: /opt/myapp/docker-compose.yml
+      env-file-path: /opt/myapp/.env
+      env-content: |
+        NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+      force-recreate: true
       # debug: true # enable temporarily when investigating deploy issues
     secrets:
       SSH_HOST: ${{ secrets.SSH_HOST }}

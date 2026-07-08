@@ -58,6 +58,21 @@ on:
         required: false
         type: boolean
         default: false
+      env-file-path:
+        description: Remote .env path to create/update before deploy
+        required: false
+        type: string
+        default: ""
+      env-content:
+        description: Content for remote .env file
+        required: false
+        type: string
+        default: ""
+      force-recreate:
+        description: Force recreate containers during docker compose up
+        required: false
+        type: boolean
+        default: false
       debug:
         description: Enable verbose deploy diagnostics
         required: false
@@ -72,6 +87,8 @@ on:
         required: false
       SSH_KEY:
         required: true
+      ENV_CONTENT:
+        required: false
       REGISTRY_USERNAME:
         required: false
       REGISTRY_PASSWORD:
@@ -87,6 +104,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      HAS_ENV_CONTENT: ${{ inputs.env-content != '' || secrets.ENV_CONTENT != '' }}
     outputs:
       deployed-image-uri: ${{ steps.deploy.outputs.deployed-image-uri }}
       deploy-status: ${{ steps.deploy.outputs.deploy-status }}
@@ -184,6 +203,84 @@ jobs:
           echo "registry-host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
           echo "Resolved image: ${RESOLVED}"
 
+      - name: Resolve env file target
+        id: env-target
+        if: env.HAS_ENV_CONTENT == 'true'
+        shell: bash
+        env:
+          INPUT_ENV_FILE_PATH: ${{ inputs.env-file-path }}
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "$INPUT_ENV_FILE_PATH" ]; then
+            ENV_TARGET_PATH="$INPUT_ENV_FILE_PATH"
+          else
+            ENV_TARGET_PATH="${INPUT_WORKING_DIRECTORY%/}/.env"
+          fi
+
+          ENV_TARGET_DIR=$(dirname "$ENV_TARGET_PATH")
+          ENV_TARGET_NAME=$(basename "$ENV_TARGET_PATH")
+
+          echo "path=${ENV_TARGET_PATH}" >> "$GITHUB_OUTPUT"
+          echo "dir=${ENV_TARGET_DIR}" >> "$GITHUB_OUTPUT"
+          echo "name=${ENV_TARGET_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare env file
+        if: env.HAS_ENV_CONTENT == 'true'
+        shell: bash
+        env:
+          ENV_CONTENT_INPUT: ${{ inputs.env-content }}
+          ENV_CONTENT_SECRET: ${{ secrets.ENV_CONTENT }}
+        run: |
+          mkdir -p .devops-components-deploy/env
+          umask 077
+          : > .devops-components-deploy/env/.env
+          if [ -n "$ENV_CONTENT_INPUT" ]; then
+            printf '%s\n' "$ENV_CONTENT_INPUT" >> .devops-components-deploy/env/.env
+          fi
+          if [ -n "$ENV_CONTENT_SECRET" ]; then
+            printf '%s\n' "$ENV_CONTENT_SECRET" >> .devops-components-deploy/env/.env
+          fi
+
+      - name: Ensure remote env directory
+        if: env.HAS_ENV_CONTENT == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            mkdir -p "${{ steps.env-target.outputs.dir }}"
+
+      - name: Upload env file
+        if: env.HAS_ENV_CONTENT == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: .devops-components-deploy/env/.env
+          target: ${{ steps.env-target.outputs.dir }}/
+          strip_components: 2
+          overwrite: true
+
+      - name: Secure remote env file
+        if: env.HAS_ENV_CONTENT == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            if [ "${{ steps.env-target.outputs.name }}" != ".env" ]; then
+              mv "${{ steps.env-target.outputs.dir }}/.env" "${{ steps.env-target.outputs.path }}"
+            fi
+            chmod 600 "${{ steps.env-target.outputs.path }}"
+
       - name: Deploy via SSH and docker compose
         id: deploy
         uses: DiegoCalleri/devops-components/actions/ssh-compose-deploy@v1
@@ -200,4 +297,5 @@ jobs:
           registry-username: ${{ secrets.REGISTRY_USERNAME }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           pull-only: ${{ inputs.pull-only }}
+          force-recreate: ${{ inputs.force-recreate }}
           debug: ${{ inputs.debug }}
