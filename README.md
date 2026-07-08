@@ -427,7 +427,7 @@ with:
   debug: true
 ```
 
-Debug mode включает подробный вывод native SSH deploy: `IMAGE_URI`, `WORKING_DIRECTORY`, `COMPOSE_PATH`, `docker compose config`, `docker ps -a` и последние `docker compose logs --tail=100`. Пароль registry не выводится.
+Debug mode включает подробный вывод native SSH deploy: `IMAGE_URI`, `WORKING_DIRECTORY`, `COMPOSE_PATH`, `docker compose config`, `docker ps -a` и последние `docker compose logs --tail=100`. В логах также есть маркеры `[native-ssh] remote script started` и `[native-ssh] remote script finished`; если финального маркера нет, job завершится ошибкой. Пароль registry не выводится.
 
 ---
 

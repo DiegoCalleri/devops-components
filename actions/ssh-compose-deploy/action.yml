@@ -129,30 +129,30 @@ runs:
           printf "%s" "$1" | base64 -w 0
         }
 
-        REMOTE_ENV="IMAGE_URI_B64=$(b64 "$IMAGE_URI")"
-        REMOTE_ENV="$REMOTE_ENV WORKING_DIRECTORY_B64=$(b64 "$WORKING_DIRECTORY")"
-        REMOTE_ENV="$REMOTE_ENV COMPOSE_PATH_B64=$(b64 "$COMPOSE_PATH")"
-        REMOTE_ENV="$REMOTE_ENV COMPOSE_PROJECT_B64=$(b64 "$COMPOSE_PROJECT")"
-        REMOTE_ENV="$REMOTE_ENV ENV_FILE_PATH_B64=$(b64 "$ENV_FILE_PATH")"
-        REMOTE_ENV="$REMOTE_ENV ENV_CONTENT_B64=$ENV_CONTENT_B64"
-        REMOTE_ENV="$REMOTE_ENV REGISTRY_HOST_B64=$(b64 "$REGISTRY_HOST")"
-        REMOTE_ENV="$REMOTE_ENV REGISTRY_USERNAME_B64=$(b64 "$REGISTRY_USERNAME")"
-        REMOTE_ENV="$REMOTE_ENV REGISTRY_PASSWORD_B64=$(b64 "$REGISTRY_PASSWORD")"
-        REMOTE_ENV="$REMOTE_ENV PULL_ONLY_B64=$(b64 "$PULL_ONLY")"
-        REMOTE_ENV="$REMOTE_ENV FORCE_RECREATE_B64=$(b64 "$FORCE_RECREATE")"
-        REMOTE_ENV="$REMOTE_ENV DEBUG_B64=$(b64 "$DEBUG")"
-
-        ssh -i ~/.ssh/devops_components_deploy_key \
-          -p "$SSH_PORT" \
-          -o StrictHostKeyChecking=accept-new \
-          -o ServerAliveInterval=30 \
-          "$SSH_USER@$SSH_HOST" \
-          "$REMOTE_ENV bash -s" <<'REMOTE_SCRIPT'
-        set -euo pipefail
+        remote_script="$(mktemp)"
+        ssh_output_file="$(mktemp)"
+        trap 'rm -f "$remote_script" "$ssh_output_file"' EXIT
+        {
+          printf '%s\n' 'set -euo pipefail' ''
+          printf 'IMAGE_URI_B64=%s\n' "$(b64 "$IMAGE_URI")"
+          printf 'WORKING_DIRECTORY_B64=%s\n' "$(b64 "$WORKING_DIRECTORY")"
+          printf 'COMPOSE_PATH_B64=%s\n' "$(b64 "$COMPOSE_PATH")"
+          printf 'COMPOSE_PROJECT_B64=%s\n' "$(b64 "$COMPOSE_PROJECT")"
+          printf 'ENV_FILE_PATH_B64=%s\n' "$(b64 "$ENV_FILE_PATH")"
+          printf 'ENV_CONTENT_B64=%s\n' "$ENV_CONTENT_B64"
+          printf 'REGISTRY_HOST_B64=%s\n' "$(b64 "$REGISTRY_HOST")"
+          printf 'REGISTRY_USERNAME_B64=%s\n' "$(b64 "$REGISTRY_USERNAME")"
+          printf 'REGISTRY_PASSWORD_B64=%s\n' "$(b64 "$REGISTRY_PASSWORD")"
+          printf 'PULL_ONLY_B64=%s\n' "$(b64 "$PULL_ONLY")"
+          printf 'FORCE_RECREATE_B64=%s\n' "$(b64 "$FORCE_RECREATE")"
+          printf 'DEBUG_B64=%s\n' "$(b64 "$DEBUG")"
+          cat <<'REMOTE_SCRIPT'
 
         decode_var() {
           printf '%s' "$1" | base64 -d
         }
+
+        echo "[native-ssh] remote script started"
 
         IMAGE_URI="$(decode_var "$IMAGE_URI_B64")"
         WORKING_DIRECTORY="$(decode_var "$WORKING_DIRECTORY_B64")"
@@ -167,6 +167,7 @@ runs:
         DEBUG="$(decode_var "$DEBUG_B64")"
 
         if [ -n "$ENV_FILE_PATH" ] && [ -n "$ENV_CONTENT_B64" ]; then
+          echo "[native-ssh] writing env file: $ENV_FILE_PATH"
           mkdir -p "$(dirname "$ENV_FILE_PATH")"
           umask 077
           printf '%s' "$ENV_CONTENT_B64" | base64 -d > "$ENV_FILE_PATH"
@@ -240,7 +241,31 @@ runs:
         elif [ "$DEBUG" = "true" ]; then
           echo "[debug] pull-only=true, skipping compose up"
         fi
+        echo "[native-ssh] remote script finished"
         REMOTE_SCRIPT
+        } > "$remote_script"
+
+        set +e
+        ssh -i ~/.ssh/devops_components_deploy_key \
+          -p "$SSH_PORT" \
+          -o StrictHostKeyChecking=accept-new \
+          -o ServerAliveInterval=30 \
+          "$SSH_USER@$SSH_HOST" \
+          'bash -se' < "$remote_script" 2>&1 | tee "$ssh_output_file"
+        ssh_status=${PIPESTATUS[0]}
+        set -e
+
+        ssh_output="$(< "$ssh_output_file")"
+
+        if [ "$ssh_status" -ne 0 ]; then
+          echo "::error::Native SSH deploy failed with exit code $ssh_status"
+          exit "$ssh_status"
+        fi
+
+        if [[ "$ssh_output" != *"[native-ssh] remote script finished"* ]]; then
+          echo "::error::Native SSH deploy did not reach the final marker"
+          exit 1
+        fi
 
         echo "deployed-image-uri=${{ inputs.image-uri }}" >> "$GITHUB_OUTPUT"
         echo "deploy-status=success" >> "$GITHUB_OUTPUT"
