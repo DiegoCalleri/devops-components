@@ -227,30 +227,25 @@ jobs:
       - name: Write env file over SSH
         if: env.HAS_ENV_CONTENT == 'true'
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          ENV_CONTENT_INPUT: ${{ inputs.env-content }}
-          ENV_CONTENT_SECRET: ${{ secrets.ENV_CONTENT }}
-          ENV_FILE_PATH: ${{ steps.env-target.outputs.path }}
-          ENV_FILE_DIR: ${{ steps.env-target.outputs.dir }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           script_stop: true
-          envs: ENV_CONTENT_INPUT,ENV_CONTENT_SECRET,ENV_FILE_PATH,ENV_FILE_DIR
           script: |
             set -euo pipefail
+            ENV_FILE_PATH='${{ steps.env-target.outputs.path }}'
+            ENV_FILE_DIR='${{ steps.env-target.outputs.dir }}'
             mkdir -p "$ENV_FILE_DIR"
             umask 077
-            : > "$ENV_FILE_PATH"
-            if [ -n "$ENV_CONTENT_INPUT" ]; then
-              printf '%s\n' "$ENV_CONTENT_INPUT" >> "$ENV_FILE_PATH"
-            fi
-            if [ -n "$ENV_CONTENT_SECRET" ]; then
-              printf '%s\n' "$ENV_CONTENT_SECRET" >> "$ENV_FILE_PATH"
-            fi
+            cat > "$ENV_FILE_PATH" <<'__DEVOPS_COMPONENTS_ENV_EOF__'
+            ${{ inputs.env-content }}
+            ${{ secrets.ENV_CONTENT }}
+            __DEVOPS_COMPONENTS_ENV_EOF__
             chmod 600 "$ENV_FILE_PATH"
+            test -f "$ENV_FILE_PATH"
+            ls -l "$ENV_FILE_PATH"
 
       - name: Deploy via SSH and docker compose
         id: deploy
