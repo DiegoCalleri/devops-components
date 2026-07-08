@@ -1,0 +1,30 @@
+# Example: deploy Next.js app to GHCR
+#
+# Copy this file to your Next.js repo:
+#   .github/workflows/deploy.yml
+#
+# Prerequisites:
+#   1. Copy docker/nextjs.Dockerfile from devops-components to your repo root as Dockerfile
+#   2. Set output: 'standalone' in next.config.js
+#   3. Ensure GITHUB_TOKEN has packages:write (or use a PAT)
+
+name: Deploy Next.js
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: nextjs
+      image-name: ${{ github.repository }}
+      registry: ghcr
+      tags: latest,sha-${{ github.sha }}
+      build-args: |
+        NEXT_PUBLIC_API_URL=https://api.example.com
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

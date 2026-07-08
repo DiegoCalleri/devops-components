@@ -1,0 +1,27 @@
+# Example: deploy Node.js API to GHCR
+#
+# Copy this file to your Node.js backend repo:
+#   .github/workflows/deploy.yml
+#
+# Prerequisites:
+#   1. Copy docker/nodejs.Dockerfile from devops-components to your repo root as Dockerfile
+#   2. Adjust CMD in Dockerfile for your entry point (dist/main.js for NestJS, etc.)
+#   3. Add a /health endpoint for the HEALTHCHECK
+
+name: Deploy Node.js API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: nodejs
+      image-name: ${{ github.repository }}
+      registry: ghcr
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

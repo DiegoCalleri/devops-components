@@ -1,0 +1,199 @@
+name: Build and Push Docker Image
+description: Build a Docker image and push it to a container registry (GHCR, ECR, YCR, or custom).
+
+inputs:
+  image-name:
+    description: Image name without registry prefix (e.g. my-org/my-app)
+    required: true
+  registry:
+    description: Registry preset — ghcr, ecr, ycr, or custom
+    required: true
+    default: ghcr
+  registry-url:
+    description: Custom registry URL (required when registry=custom, e.g. registry.example.com)
+    required: false
+    default: ""
+  tags:
+    description: Comma-separated image tags
+    required: true
+    default: latest
+  dockerfile:
+    description: Path to Dockerfile
+    required: true
+  context:
+    description: Docker build context
+    required: false
+    default: .
+  build-args:
+    description: Multiline build-args (KEY=VALUE per line)
+    required: false
+    default: ""
+  platforms:
+    description: Target platforms (e.g. linux/amd64)
+    required: false
+    default: linux/amd64
+  push:
+    description: Push image to registry
+    required: false
+    default: "true"
+
+  # Registry credentials
+  registry-username:
+    description: Registry username (GHCR/custom)
+    required: false
+    default: ""
+  registry-password:
+    description: Registry password or token (GHCR/custom)
+    required: false
+    default: ""
+
+  # AWS ECR
+  aws-region:
+    description: AWS region for ECR
+    required: false
+    default: ""
+  aws-access-key-id:
+    description: AWS access key ID for ECR
+    required: false
+    default: ""
+  aws-secret-access-key:
+    description: AWS secret access key for ECR
+    required: false
+    default: ""
+
+  # Yandex Container Registry
+  yc-sa-json-credentials:
+    description: Yandex Cloud service account JSON credentials
+    required: false
+    default: ""
+  yc-registry-id:
+    description: Yandex Container Registry ID
+    required: false
+    default: ""
+
+outputs:
+  image-uri:
+    description: Full image URI with the first tag
+    value: ${{ steps.meta.outputs.image-uri }}
+  image-digest:
+    description: Image digest (sha256)
+    value: ${{ steps.build.outputs.digest }}
+  image-tags:
+    description: Comma-separated list of pushed tags
+    value: ${{ steps.meta.outputs.image-tags }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve registry URL
+      id: registry
+      shell: bash
+      run: |
+        case "${{ inputs.registry }}" in
+          ghcr)
+            echo "url=ghcr.io" >> "$GITHUB_OUTPUT"
+            ;;
+          ecr)
+            if [ -z "${{ inputs.aws-region }}" ]; then
+              echo "::error::aws-region is required when registry=ecr"
+              exit 1
+            fi
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            echo "url=${ACCOUNT_ID}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+            ;;
+          ycr)
+            if [ -z "${{ inputs.yc-registry-id }}" ]; then
+              echo "::error::yc-registry-id is required when registry=ycr"
+              exit 1
+            fi
+            echo "url=cr.yandex/${{ inputs.yc-registry-id }}" >> "$GITHUB_OUTPUT"
+            ;;
+          custom)
+            if [ -z "${{ inputs.registry-url }}" ]; then
+              echo "::error::registry-url is required when registry=custom"
+              exit 1
+            fi
+            echo "url=${{ inputs.registry-url }}" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "::error::Unknown registry: ${{ inputs.registry }}"
+            exit 1
+            ;;
+        esac
+
+    - name: Login to GHCR
+      if: inputs.registry == 'ghcr'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ inputs.registry-username }}
+        password: ${{ inputs.registry-password }}
+
+    - name: Configure AWS credentials
+      if: inputs.registry == 'ecr'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Login to Amazon ECR
+      if: inputs.registry == 'ecr'
+      id: ecr-login
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Login to Yandex Container Registry
+      if: inputs.registry == 'ycr'
+      uses: yc-actions/yc-cr-login@v2
+      with:
+        yc-sa-json-credentials: ${{ inputs.yc-sa-json-credentials }}
+
+    - name: Login to custom registry
+      if: inputs.registry == 'custom'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry-url }}
+        username: ${{ inputs.registry-username }}
+        password: ${{ inputs.registry-password }}
+
+    - name: Prepare image metadata
+      id: meta
+      shell: bash
+      run: |
+        REGISTRY_URL="${{ steps.registry.outputs.url }}"
+        IMAGE_NAME="${{ inputs.image-name }}"
+        TAGS="${{ inputs.tags }}"
+
+        FULL_TAGS=""
+        FIRST_URI=""
+        while IFS= read -r tag; do
+          tag=$(echo "$tag" | xargs)
+          [ -z "$tag" ] && continue
+          full="${REGISTRY_URL}/${IMAGE_NAME}:${tag}"
+          FULL_TAGS="${FULL_TAGS}${full}"$'\n'
+          [ -z "$FIRST_URI" ] && FIRST_URI="$full"
+        done < <(echo "$TAGS" | tr ',' '\n')
+
+        echo "image-uri=${FIRST_URI}" >> "$GITHUB_OUTPUT"
+        echo "image-tags=${TAGS}" >> "$GITHUB_OUTPUT"
+        {
+          echo "tags<<EOF"
+          echo -n "$FULL_TAGS"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.meta.outputs.tags }}
+        platforms: ${{ inputs.platforms }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

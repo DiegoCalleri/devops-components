@@ -1,0 +1,20 @@
+# Example: deploy Node.js API to AWS ECR
+
+name: Deploy Node.js API to ECR
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  push-image:
+    uses: DiegoCalleri/devops-components/.github/workflows/push-image.yml@v1
+    with:
+      app-type: nodejs
+      image-name: my-backend
+      registry: ecr
+      tags: latest,${{ github.sha }}
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}

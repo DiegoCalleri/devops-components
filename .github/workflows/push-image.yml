@@ -1,0 +1,180 @@
+name: Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      app-type:
+        description: Application preset — nextjs or nodejs
+        required: true
+        type: string
+      image-name:
+        description: Image name without registry prefix (e.g. my-org/my-app)
+        required: true
+        type: string
+      registry:
+        description: Registry preset — ghcr, ecr, ycr, or custom
+        required: false
+        type: string
+        default: ghcr
+      registry-url:
+        description: Custom registry URL (required when registry=custom)
+        required: false
+        type: string
+        default: ""
+      dockerfile:
+        description: Override Dockerfile path (defaults to app-type preset)
+        required: false
+        type: string
+        default: ""
+      context:
+        description: Docker build context
+        required: false
+        type: string
+        default: .
+      tags:
+        description: Comma-separated image tags
+        required: false
+        type: string
+        default: ""
+      build-args:
+        description: Additional build-args (KEY=VALUE per line)
+        required: false
+        type: string
+        default: ""
+      platforms:
+        description: Target platforms
+        required: false
+        type: string
+        default: linux/amd64
+      push:
+        description: Push image to registry
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_REGION:
+        required: false
+      YC_SA_JSON_CREDENTIALS:
+        required: false
+      YC_REGISTRY_ID:
+        required: false
+    outputs:
+      image-uri:
+        description: Full image URI with the first tag
+        value: ${{ jobs.push.outputs.image-uri }}
+      image-digest:
+        description: Image digest (sha256)
+        value: ${{ jobs.push.outputs.image-digest }}
+      image-tags:
+        description: Comma-separated list of pushed tags
+        value: ${{ jobs.push.outputs.image-tags }}
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-uri: ${{ steps.build.outputs.image-uri }}
+      image-digest: ${{ steps.build.outputs.image-digest }}
+      image-tags: ${{ steps.build.outputs.image-tags }}
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Dockerfile
+        id: dockerfile
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.dockerfile }}" ]; then
+            DOCKERFILE="${{ inputs.dockerfile }}"
+          else
+            case "${{ inputs.app-type }}" in
+              nextjs)
+                DOCKERFILE="Dockerfile"
+                if [ ! -f "$DOCKERFILE" ]; then
+                  echo "::warning::Dockerfile not found in caller repo. Copy docker/nextjs.Dockerfile from devops-components."
+                fi
+                ;;
+              nodejs)
+                DOCKERFILE="Dockerfile"
+                if [ ! -f "$DOCKERFILE" ]; then
+                  echo "::warning::Dockerfile not found in caller repo. Copy docker/nodejs.Dockerfile from devops-components."
+                fi
+                ;;
+              *)
+                echo "::error::Unknown app-type: ${{ inputs.app-type }}. Use 'nextjs' or 'nodejs'."
+                exit 1
+                ;;
+            esac
+          fi
+          echo "path=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image tags
+        id: tags
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tags }}" ]; then
+            echo "value=${{ inputs.tags }}" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            echo "value=latest,sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve build args
+        id: build-args
+        shell: bash
+        run: |
+          ARGS=""
+          case "${{ inputs.app-type }}" in
+            nextjs)
+              ARGS="NODE_ENV=production"
+              ;;
+            nodejs)
+              ARGS="NODE_ENV=production"
+              ;;
+          esac
+
+          if [ -n "${{ inputs.build-args }}" ]; then
+            if [ -n "$ARGS" ]; then
+              ARGS="${ARGS}"$'\n'"${{ inputs.build-args }}"
+            else
+              ARGS="${{ inputs.build-args }}"
+            fi
+          fi
+
+          {
+            echo "value<<EOF"
+            echo "$ARGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        id: build
+        uses: DiegoCalleri/devops-components/actions/build-and-push@main
+        with:
+          image-name: ${{ inputs.image-name }}
+          registry: ${{ inputs.registry }}
+          registry-url: ${{ inputs.registry-url }}
+          tags: ${{ steps.tags.outputs.value }}
+          dockerfile: ${{ steps.dockerfile.outputs.path }}
+          context: ${{ inputs.context }}
+          build-args: ${{ steps.build-args.outputs.value }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+          yc-registry-id: ${{ secrets.YC_REGISTRY_ID }}
