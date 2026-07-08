@@ -58,15 +58,12 @@ on:
         required: false
         type: boolean
         default: false
-      ssh-port:
-        description: SSH port
-        required: false
-        type: string
-        default: "22"
     secrets:
       SSH_HOST:
         required: true
       SSH_USER:
+        required: true
+      SSH_PORT:
         required: true
       SSH_KEY:
         required: true
@@ -190,7 +187,7 @@ jobs:
           ssh-host: ${{ secrets.SSH_HOST }}
           ssh-user: ${{ secrets.SSH_USER }}
           ssh-key: ${{ secrets.SSH_KEY }}
-          ssh-port: ${{ inputs.ssh-port }}
+          ssh-port: ${{ secrets.SSH_PORT }}
           working-directory: ${{ inputs.working-directory }}
           compose-path: ${{ inputs.compose-path }}
           compose-project: ${{ inputs.compose-project }}
