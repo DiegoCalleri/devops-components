@@ -224,32 +224,9 @@ jobs:
           echo "dir=${ENV_TARGET_DIR}" >> "$GITHUB_OUTPUT"
           echo "name=${ENV_TARGET_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Write env file over SSH
-        if: env.HAS_ENV_CONTENT == 'true'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            ENV_FILE_PATH='${{ steps.env-target.outputs.path }}'
-            ENV_FILE_DIR='${{ steps.env-target.outputs.dir }}'
-            mkdir -p "$ENV_FILE_DIR"
-            umask 077
-            cat > "$ENV_FILE_PATH" <<'__DEVOPS_COMPONENTS_ENV_EOF__'
-            ${{ inputs.env-content }}
-            ${{ secrets.ENV_CONTENT }}
-            __DEVOPS_COMPONENTS_ENV_EOF__
-            chmod 600 "$ENV_FILE_PATH"
-            test -f "$ENV_FILE_PATH"
-            ls -l "$ENV_FILE_PATH"
-
       - name: Deploy via SSH and docker compose
         id: deploy
-        uses: DiegoCalleri/devops-components/actions/ssh-compose-deploy@v1
+        uses: DiegoCalleri/devops-components/actions/ssh-compose-deploy@main
         with:
           image-uri: ${{ steps.image.outputs.uri }}
           ssh-host: ${{ secrets.SSH_HOST }}
@@ -259,6 +236,9 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
           compose-path: ${{ inputs.compose-path }}
           compose-project: ${{ inputs.compose-project }}
+          env-file-path: ${{ steps.env-target.outputs.path }}
+          env-content: ${{ inputs.env-content }}
+          env-content-secret: ${{ secrets.ENV_CONTENT }}
           registry-host: ${{ steps.image.outputs.registry-host }}
           registry-username: ${{ secrets.REGISTRY_USERNAME }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}

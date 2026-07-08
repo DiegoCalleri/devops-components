@@ -30,6 +30,18 @@ inputs:
     description: Docker compose project name (-p flag)
     required: false
     default: ""
+  env-file-path:
+    description: Remote .env path to create/update before deploy
+    required: false
+    default: ""
+  env-content:
+    description: Non-secret .env content
+    required: false
+    default: ""
+  env-content-secret:
+    description: Secret .env content
+    required: false
+    default: ""
   registry-host:
     description: Registry host for docker login (e.g. ghcr.io)
     required: false
@@ -66,98 +78,169 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Deploy via SSH
-      uses: appleboy/ssh-action@v1.2.0
+    - name: Configure SSH key
+      shell: bash
       env:
+        SSH_KEY: ${{ inputs.ssh-key }}
+        SSH_HOST: ${{ inputs.ssh-host }}
+        SSH_PORT: ${{ inputs.ssh-port }}
+      run: |
+        set -euo pipefail
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$SSH_KEY" > ~/.ssh/devops_components_deploy_key
+        chmod 600 ~/.ssh/devops_components_deploy_key
+        ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+    - name: Deploy via native SSH
+      id: deploy
+      shell: bash
+      env:
+        SSH_HOST: ${{ inputs.ssh-host }}
+        SSH_USER: ${{ inputs.ssh-user }}
+        SSH_PORT: ${{ inputs.ssh-port }}
         IMAGE_URI: ${{ inputs.image-uri }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
         COMPOSE_PATH: ${{ inputs.compose-path }}
         COMPOSE_PROJECT: ${{ inputs.compose-project }}
+        ENV_FILE_PATH: ${{ inputs.env-file-path }}
+        ENV_CONTENT: ${{ inputs.env-content }}
+        ENV_CONTENT_SECRET: ${{ inputs.env-content-secret }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         REGISTRY_USERNAME: ${{ inputs.registry-username }}
         REGISTRY_PASSWORD: ${{ inputs.registry-password }}
         PULL_ONLY: ${{ inputs.pull-only }}
         FORCE_RECREATE: ${{ inputs.force-recreate }}
         DEBUG: ${{ inputs.debug }}
-      with:
-        host: ${{ inputs.ssh-host }}
-        username: ${{ inputs.ssh-user }}
-        key: ${{ inputs.ssh-key }}
-        port: ${{ inputs.ssh-port }}
-        script_stop: true
-        debug: ${{ inputs.debug }}
-        envs: IMAGE_URI,WORKING_DIRECTORY,COMPOSE_PATH,COMPOSE_PROJECT,REGISTRY_HOST,REGISTRY_USERNAME,REGISTRY_PASSWORD,PULL_ONLY,FORCE_RECREATE,DEBUG
-        script: |
-          set -euo pipefail
-
-          cd "$WORKING_DIRECTORY"
-
-          if [ ! -f "$COMPOSE_PATH" ]; then
-            echo "::error::Compose file not found: $COMPOSE_PATH"
-            exit 1
-          fi
-
-          if [ "$DEBUG" = "true" ]; then
-            echo "[debug] Starting SSH compose deploy"
-            echo "[debug] IMAGE_URI=$IMAGE_URI"
-            echo "[debug] WORKING_DIRECTORY=$WORKING_DIRECTORY"
-            echo "[debug] COMPOSE_PATH=$COMPOSE_PATH"
-            echo "[debug] COMPOSE_PROJECT=$COMPOSE_PROJECT"
-            echo "[debug] REGISTRY_HOST=$REGISTRY_HOST"
-            echo "[debug] PULL_ONLY=$PULL_ONLY"
-            echo "[debug] FORCE_RECREATE=$FORCE_RECREATE"
-            echo "[debug] pwd=$(pwd)"
-            echo "[debug] directory listing:"
-            ls -la
-            docker --version
-            docker compose version
-          fi
-
-          if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            echo "Logging in to $REGISTRY_HOST as $REGISTRY_USERNAME..."
-            echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
-            echo "Login successful"
-          else
-            echo "Skipping docker login (credentials not provided)"
-          fi
-          echo ""
-
-          COMPOSE_ARGS=(-f "$COMPOSE_PATH")
-          if [ -n "$COMPOSE_PROJECT" ]; then
-            COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT")
-          fi
-
-          export IMAGE_URI
-          if [ "$DEBUG" = "true" ]; then
-            echo "[debug] docker compose config:"
-            docker compose "${COMPOSE_ARGS[@]}" config
-            echo "[debug] pulling image..."
-          fi
-          docker compose "${COMPOSE_ARGS[@]}" pull
-
-          if [ "$PULL_ONLY" != "true" ]; then
-            if [ "$DEBUG" = "true" ]; then
-              echo "[debug] starting containers..."
-            fi
-            UP_ARGS=(up -d --remove-orphans)
-            if [ "$FORCE_RECREATE" = "true" ]; then
-              UP_ARGS+=(--force-recreate)
-            fi
-            docker compose "${COMPOSE_ARGS[@]}" "${UP_ARGS[@]}"
-            docker compose "${COMPOSE_ARGS[@]}" ps
-            if [ "$DEBUG" = "true" ]; then
-              echo "[debug] all containers:"
-              docker ps -a
-              echo "[debug] recent compose logs:"
-              docker compose "${COMPOSE_ARGS[@]}" logs --tail=100
-            fi
-          elif [ "$DEBUG" = "true" ]; then
-            echo "[debug] pull-only=true, skipping compose up"
-          fi
-
-    - name: Set deploy outputs
-      id: deploy
-      shell: bash
       run: |
+        set -euo pipefail
+
+        tmp_env_payload="$(mktemp)"
+        : > "$tmp_env_payload"
+        if [ -n "$ENV_CONTENT" ]; then
+          printf '%s\n' "$ENV_CONTENT" >> "$tmp_env_payload"
+        fi
+        if [ -n "$ENV_CONTENT_SECRET" ]; then
+          printf '%s\n' "$ENV_CONTENT_SECRET" >> "$tmp_env_payload"
+        fi
+        ENV_CONTENT_B64="$(base64 -w 0 "$tmp_env_payload")"
+        rm -f "$tmp_env_payload"
+
+        b64() {
+          printf "%s" "$1" | base64 -w 0
+        }
+
+        REMOTE_ENV="IMAGE_URI_B64=$(b64 "$IMAGE_URI")"
+        REMOTE_ENV="$REMOTE_ENV WORKING_DIRECTORY_B64=$(b64 "$WORKING_DIRECTORY")"
+        REMOTE_ENV="$REMOTE_ENV COMPOSE_PATH_B64=$(b64 "$COMPOSE_PATH")"
+        REMOTE_ENV="$REMOTE_ENV COMPOSE_PROJECT_B64=$(b64 "$COMPOSE_PROJECT")"
+        REMOTE_ENV="$REMOTE_ENV ENV_FILE_PATH_B64=$(b64 "$ENV_FILE_PATH")"
+        REMOTE_ENV="$REMOTE_ENV ENV_CONTENT_B64=$ENV_CONTENT_B64"
+        REMOTE_ENV="$REMOTE_ENV REGISTRY_HOST_B64=$(b64 "$REGISTRY_HOST")"
+        REMOTE_ENV="$REMOTE_ENV REGISTRY_USERNAME_B64=$(b64 "$REGISTRY_USERNAME")"
+        REMOTE_ENV="$REMOTE_ENV REGISTRY_PASSWORD_B64=$(b64 "$REGISTRY_PASSWORD")"
+        REMOTE_ENV="$REMOTE_ENV PULL_ONLY_B64=$(b64 "$PULL_ONLY")"
+        REMOTE_ENV="$REMOTE_ENV FORCE_RECREATE_B64=$(b64 "$FORCE_RECREATE")"
+        REMOTE_ENV="$REMOTE_ENV DEBUG_B64=$(b64 "$DEBUG")"
+
+        ssh -i ~/.ssh/devops_components_deploy_key \
+          -p "$SSH_PORT" \
+          -o StrictHostKeyChecking=accept-new \
+          -o ServerAliveInterval=30 \
+          "$SSH_USER@$SSH_HOST" \
+          "$REMOTE_ENV bash -s" <<'REMOTE_SCRIPT'
+        set -euo pipefail
+
+        decode_var() {
+          printf '%s' "$1" | base64 -d
+        }
+
+        IMAGE_URI="$(decode_var "$IMAGE_URI_B64")"
+        WORKING_DIRECTORY="$(decode_var "$WORKING_DIRECTORY_B64")"
+        COMPOSE_PATH="$(decode_var "$COMPOSE_PATH_B64")"
+        COMPOSE_PROJECT="$(decode_var "$COMPOSE_PROJECT_B64")"
+        ENV_FILE_PATH="$(decode_var "$ENV_FILE_PATH_B64")"
+        REGISTRY_HOST="$(decode_var "$REGISTRY_HOST_B64")"
+        REGISTRY_USERNAME="$(decode_var "$REGISTRY_USERNAME_B64")"
+        REGISTRY_PASSWORD="$(decode_var "$REGISTRY_PASSWORD_B64")"
+        PULL_ONLY="$(decode_var "$PULL_ONLY_B64")"
+        FORCE_RECREATE="$(decode_var "$FORCE_RECREATE_B64")"
+        DEBUG="$(decode_var "$DEBUG_B64")"
+
+        if [ -n "$ENV_FILE_PATH" ] && [ -n "$ENV_CONTENT_B64" ]; then
+          mkdir -p "$(dirname "$ENV_FILE_PATH")"
+          umask 077
+          printf '%s' "$ENV_CONTENT_B64" | base64 -d > "$ENV_FILE_PATH"
+          chmod 600 "$ENV_FILE_PATH"
+          test -f "$ENV_FILE_PATH"
+          ls -l "$ENV_FILE_PATH"
+        fi
+
+        cd "$WORKING_DIRECTORY"
+
+        if [ ! -f "$COMPOSE_PATH" ]; then
+          echo "::error::Compose file not found: $COMPOSE_PATH"
+          exit 1
+        fi
+
+        if [ "$DEBUG" = "true" ]; then
+          echo "[debug] Starting SSH compose deploy"
+          echo "[debug] IMAGE_URI=$IMAGE_URI"
+          echo "[debug] WORKING_DIRECTORY=$WORKING_DIRECTORY"
+          echo "[debug] COMPOSE_PATH=$COMPOSE_PATH"
+          echo "[debug] COMPOSE_PROJECT=$COMPOSE_PROJECT"
+          echo "[debug] ENV_FILE_PATH=$ENV_FILE_PATH"
+          echo "[debug] REGISTRY_HOST=$REGISTRY_HOST"
+          echo "[debug] PULL_ONLY=$PULL_ONLY"
+          echo "[debug] FORCE_RECREATE=$FORCE_RECREATE"
+          echo "[debug] pwd=$(pwd)"
+          echo "[debug] directory listing:"
+          ls -la
+          docker --version
+          docker compose version
+        fi
+
+        if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+          echo "Logging in to $REGISTRY_HOST as $REGISTRY_USERNAME..."
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+          echo "Login successful"
+        else
+          echo "Skipping docker login (credentials not provided)"
+        fi
+        echo ""
+
+        COMPOSE_ARGS=(-f "$COMPOSE_PATH")
+        if [ -n "$COMPOSE_PROJECT" ]; then
+          COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT")
+        fi
+
+        export IMAGE_URI
+        if [ "$DEBUG" = "true" ]; then
+          echo "[debug] docker compose config:"
+          docker compose "${COMPOSE_ARGS[@]}" config
+          echo "[debug] pulling image..."
+        fi
+        docker compose "${COMPOSE_ARGS[@]}" pull
+
+        if [ "$PULL_ONLY" != "true" ]; then
+          if [ "$DEBUG" = "true" ]; then
+            echo "[debug] starting containers..."
+          fi
+          UP_ARGS=(up -d --remove-orphans)
+          if [ "$FORCE_RECREATE" = "true" ]; then
+            UP_ARGS+=(--force-recreate)
+          fi
+          docker compose "${COMPOSE_ARGS[@]}" "${UP_ARGS[@]}"
+          docker compose "${COMPOSE_ARGS[@]}" ps
+          if [ "$DEBUG" = "true" ]; then
+            echo "[debug] all containers:"
+            docker ps -a
+            echo "[debug] recent compose logs:"
+            docker compose "${COMPOSE_ARGS[@]}" logs --tail=100
+          fi
+        elif [ "$DEBUG" = "true" ]; then
+          echo "[debug] pull-only=true, skipping compose up"
+        fi
+        REMOTE_SCRIPT
+
         echo "deployed-image-uri=${{ inputs.image-uri }}" >> "$GITHUB_OUTPUT"
         echo "deploy-status=success" >> "$GITHUB_OUTPUT"
